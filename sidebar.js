@@ -43,9 +43,10 @@ let lastSuggestedUserPrompt = '';
 
 // Listen for the results coming back from content.js
 chrome.runtime.onMessage.addListener(async ({ message, tools, url }, sender) => {
+  if (sender.frameId !== 0) return;
+
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (sender.tab && sender.tab.id !== tab.id) return;
-  if (sender.frameId !== 0) return;
 
   tbody.innerHTML = '';
   thead.innerHTML = '';
