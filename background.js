@@ -12,7 +12,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   tabs.forEach(({ id: tabId }) => {
     chrome.scripting
       .executeScript({
-        target: { tabId },
+        target: { tabId, allFrames: true },
         files: ['content.js'],
       })
       .catch(() => {});

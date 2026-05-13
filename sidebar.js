@@ -45,6 +45,7 @@ let lastSuggestedUserPrompt = '';
 chrome.runtime.onMessage.addListener(async ({ message, tools, url }, sender) => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (sender.tab && sender.tab.id !== tab.id) return;
+  if (sender.frameId !== 0) return;
 
   tbody.innerHTML = '';
   thead.innerHTML = '';
@@ -76,6 +77,7 @@ chrome.runtime.onMessage.addListener(async ({ message, tools, url }, sender) => 
 
   const keys = Object.keys(tools[0]);
   keys.forEach((key) => {
+    if (key === 'location') return;
     const th = document.createElement('th');
     th.textContent = key;
     thead.appendChild(th);
@@ -84,6 +86,7 @@ chrome.runtime.onMessage.addListener(async ({ message, tools, url }, sender) => 
   tools.forEach((item) => {
     const row = document.createElement('tr');
     keys.forEach((key) => {
+      if (key === 'location') return;
       const td = document.createElement('td');
       try {
         td.innerHTML = `<pre>${JSON.stringify(JSON.parse(item[key]), '', '  ')}</pre>`;
@@ -97,7 +100,11 @@ chrome.runtime.onMessage.addListener(async ({ message, tools, url }, sender) => 
     const option = document.createElement('option');
     option.textContent = `"${item.name}"`;
     option.value = item.name;
+    if (new Set(tools.map((t) => t.location)).size > 1) {
+      option.textContent += ` | ${item.location || ''}`;
+    }
     option.dataset.inputSchema = item.inputSchema || '{}';
+    option.dataset.location = item.location || '';
     toolNames.appendChild(option);
   });
   updateDefaultValueForInputArgs();
@@ -246,15 +253,17 @@ async function promptAI() {
       finalResponseGiven = true;
     } else {
       const toolResponses = [];
-      for (const { name, args } of functionCalls) {
+      for (const { name: name, args } of functionCalls) {
+        const [locationIndex, toolName] = name.split(/_(.*)/s)[1].split(/_(.*)/s);
+        const location = currentTools[locationIndex].location;
         const inputArgs = JSON.stringify(args);
-        logPrompt(`AI calling tool "${name}" with ${inputArgs}`);
+        logPrompt(`AI calling tool "${toolName}" with ${inputArgs}`);
         try {
-          const result = await executeTool(tab.id, name, inputArgs);
+          const result = await executeTool(tab.id, toolName, inputArgs, location);
           toolResponses.push({ functionResponse: { name, response: { result } } });
-          logPrompt(`Tool "${name}" result: ${result}`);
+          logPrompt(`Tool "${toolName}" result: ${result}`);
         } catch (e) {
-          logPrompt(`⚠️ Error executing tool "${name}": ${e.message}`);
+          logPrompt(`⚠️ Error executing tool "${toolName}": ${e.message}`);
           toolResponses.push({
             functionResponse: { name, response: { error: e.message } },
           });
@@ -299,17 +308,19 @@ executeBtn.onclick = async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const name = toolNames.selectedOptions[0].value;
   const inputArgs = inputArgsText.value;
-  toolResults.textContent = await executeTool(tab.id, name, inputArgs).catch(
+  const location = toolNames.selectedOptions[0].dataset.location;
+  toolResults.textContent = await executeTool(tab.id, name, inputArgs, location).catch(
     (error) => `⚠️ Error: "${error}"`,
   );
 };
 
-async function executeTool(tabId, name, inputArgs) {
+async function executeTool(tabId, name, inputArgs, location) {
   try {
     const result = await chrome.tabs.sendMessage(tabId, {
       action: 'EXECUTE_TOOL',
       name,
       inputArgs,
+      location,
     });
     if (result !== null) return result;
   } catch (error) {
@@ -320,6 +331,7 @@ async function executeTool(tabId, name, inputArgs) {
   await waitForPageLoad(tabId);
   return await chrome.tabs.sendMessage(tabId, {
     action: 'GET_CROSS_DOCUMENT_SCRIPT_TOOL_RESULT',
+    location,
   });
 }
 
@@ -359,8 +371,9 @@ function getConfig() {
   ];
 
   const functionDeclarations = currentTools.map((tool) => {
+    const locationIndex = currentTools.findIndex((t) => t.location === tool.location);
     return {
-      name: tool.name,
+      name: `_${locationIndex}_${tool.name}`,
       description: tool.description,
       parametersJsonSchema: tool.inputSchema
         ? JSON.parse(tool.inputSchema)

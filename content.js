@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-console.debug('[WebMCP] Content script injected');
+console.debug(`[WebMCP] Content script injected in ${location.href}`);
 
-chrome.runtime.onMessage.addListener(({ action, name, inputArgs }, _, reply) => {
+chrome.runtime.onMessage.addListener(({ action, name, inputArgs, location }, _, reply) => {
   try {
     if (!navigator.modelContextTesting) {
       throw new Error('Error: You must run Chrome with the "WebMCP for testing" flag enabled.');
@@ -23,7 +23,8 @@ chrome.runtime.onMessage.addListener(({ action, name, inputArgs }, _, reply) => 
       navigator.modelContextTesting.registerToolsChangedCallback(listTools);
     }
     if (action == 'EXECUTE_TOOL') {
-      console.debug(`[WebMCP] Execute tool "${name}" with`, inputArgs);
+      if (location && location !== window.location.href) return;
+      console.debug(`[WebMCP] Execute tool "${name}" with ${inputArgs} in ${location}`);
       let targetFrame, loadPromise;
       // Check if this tool is associated with a form target
       const formTarget = document.querySelector(`form[toolname="${name}"]`)?.target;
@@ -34,6 +35,26 @@ chrome.runtime.onMessage.addListener(({ action, name, inputArgs }, _, reply) => 
         });
       }
       // Execute the experimental tool
+      if ('executeTool' in navigator.modelContext) {
+        navigator.modelContext
+          .getTools()
+          .then(async (tools) => {
+            const tool = tools.find((t) => t.name === name && t.window.location.href === location);
+            let result = await navigator.modelContext.executeTool(tool, inputArgs);
+            // If result is null and we have a target frame, wait for the frame to reload.
+            if (result === null && targetFrame) {
+              console.debug(`[WebMCP] Waiting for form target ${targetFrame} to load`);
+              await loadPromise;
+              console.debug('[WebMCP] Get cross document script tool result');
+              result = targetFrame.contentWindow.document.querySelector(
+                'script[type="application/ld+json"]',
+              )?.textContent;
+            }
+            reply(result);
+          })
+          .catch(({ message }) => reply(JSON.stringify(message)));
+        return true;
+      }
       const promise = navigator.modelContextTesting.executeTool(name, inputArgs);
       promise
         .then(async (result) => {
@@ -42,8 +63,9 @@ chrome.runtime.onMessage.addListener(({ action, name, inputArgs }, _, reply) => 
             console.debug(`[WebMCP] Waiting for form target ${targetFrame} to load`);
             await loadPromise;
             console.debug('[WebMCP] Get cross document script tool result');
-            result =
-              await targetFrame.contentWindow.navigator.modelContextTesting.getCrossDocumentScriptToolResult();
+            result = targetFrame.contentWindow.document.querySelector(
+              'script[type="application/ld+json"]',
+            )?.textContent;
           }
           reply(result);
         })
@@ -51,10 +73,9 @@ chrome.runtime.onMessage.addListener(({ action, name, inputArgs }, _, reply) => 
       return true;
     }
     if (action == 'GET_CROSS_DOCUMENT_SCRIPT_TOOL_RESULT') {
-      console.debug('[WebMCP] Get cross document script tool result');
-      const promise = navigator.modelContextTesting.getCrossDocumentScriptToolResult();
-      promise.then(reply).catch(({ message }) => reply(JSON.stringify(message)));
-      return true;
+      if (location && !window.location.href.startsWith(location)) return;
+      console.debug(`[WebMCP] Get cross document script tool result in ${location}`);
+      reply(document.querySelector('script[type="application/ld+json"]')?.textContent);
     }
   } catch ({ message }) {
     chrome.runtime.sendMessage({ message });
@@ -65,6 +86,14 @@ async function listTools() {
   let tools;
   if ('getTools' in navigator.modelContext) {
     tools = await navigator.modelContext.getTools();
+    tools = tools.map((tool) => {
+      return {
+        description: tool.description,
+        name: tool.name,
+        inputSchema: tool.inputSchema,
+        location: tool.window.location.href,
+      };
+    });
   } else {
     tools = navigator.modelContextTesting.listTools();
   }
