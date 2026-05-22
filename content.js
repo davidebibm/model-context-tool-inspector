@@ -3,23 +3,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-console.debug('[WebMCP] Content script injected');
+console.debug(`[WebMCP] Content script injected in ${window.location.href}`);
 
-chrome.runtime.onMessage.addListener(({ action, name, inputArgs }, _, reply) => {
+chrome.runtime.onMessage.addListener(({ action, name, inputArgs, location }, _, reply) => {
   try {
     if (!navigator.modelContextTesting) {
       throw new Error('Error: You must run Chrome with the "WebMCP for testing" flag enabled.');
     }
     if (action == 'LIST_TOOLS') {
       listTools();
-      if ('ontoolchange' in navigator.modelContextTesting.__proto__) {
-        navigator.modelContextTesting.addEventListener('toolchange', listTools);
+      if ('ontoolchange' in navigator.modelContext) {
+        navigator.modelContext.addEventListener('toolchange', listTools);
         return;
       }
-      navigator.modelContextTesting.registerToolsChangedCallback(listTools);
+      navigator.modelContextTesting.addEventListener('toolchange', listTools);
     }
     if (action == 'EXECUTE_TOOL') {
-      console.debug(`[WebMCP] Execute tool "${name}" with`, inputArgs);
+      if (location && location !== window.location.href) return;
+      console.debug(`[WebMCP] Execute tool "${name}" with ${inputArgs} in ${location}`);
       let targetFrame, loadPromise;
       // Check if this tool is associated with a form target
       const formTarget = document.querySelector(`form[toolname="${name}"]`)?.target;
@@ -30,7 +31,15 @@ chrome.runtime.onMessage.addListener(({ action, name, inputArgs }, _, reply) => 
         });
       }
       // Execute the experimental tool
-      const promise = navigator.modelContextTesting.executeTool(name, inputArgs);
+      let promise;
+      if ('executeTool' in navigator.modelContext) {
+        promise = navigator.modelContext.getTools().then((tools) => {
+          const tool = tools.find((t) => t.name === name && t.window === window);
+          return navigator.modelContext.executeTool(tool, inputArgs);
+        });
+      } else {
+        promise = navigator.modelContextTesting.executeTool(name, inputArgs);
+      }
       promise
         .then(async (result) => {
           // If result is null and we have a target frame, wait for the frame to reload.
@@ -38,8 +47,9 @@ chrome.runtime.onMessage.addListener(({ action, name, inputArgs }, _, reply) => 
             console.debug(`[WebMCP] Waiting for form target ${targetFrame} to load`);
             await loadPromise;
             console.debug('[WebMCP] Get cross document script tool result');
-            result =
-              await targetFrame.contentWindow.navigator.modelContextTesting.getCrossDocumentScriptToolResult();
+            result = targetFrame.contentWindow.document.querySelector(
+              'script[type="application/ld+json"]',
+            )?.textContent;
           }
           reply(result);
         })
@@ -47,21 +57,61 @@ chrome.runtime.onMessage.addListener(({ action, name, inputArgs }, _, reply) => 
       return true;
     }
     if (action == 'GET_CROSS_DOCUMENT_SCRIPT_TOOL_RESULT') {
-      console.debug('[WebMCP] Get cross document script tool result');
-      const promise = navigator.modelContextTesting.getCrossDocumentScriptToolResult();
-      promise.then(reply).catch(({ message }) => reply(JSON.stringify(message)));
-      return true;
+      if (location && !window.location.href.startsWith(location)) return;
+      console.debug(`[WebMCP] Get cross document script tool result in ${location}`);
+      reply(document.querySelector('script[type="application/ld+json"]')?.textContent);
     }
   } catch ({ message }) {
     chrome.runtime.sendMessage({ message });
   }
 });
 
-function listTools() {
-  const tools = navigator.modelContextTesting.listTools();
+async function listTools() {
+  let tools = [];
+  if ('getTools' in navigator.modelContext) {
+    for (const tool of await navigator.modelContext.getTools()) {
+      let location;
+      try {
+        location = tool.window.location.href;
+      } catch {
+        location = await getLocation(tool.window);
+      }
+      tools.push({
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        readOnlyHint: tool.annotations?.readOnlyHint ? '✓' : undefined,
+        untrustedContentHint: tool.annotations?.untrustedContentHint ? '✓' : undefined,
+        name: tool.name,
+        location,
+      });
+    }
+  } else {
+    tools = navigator.modelContextTesting.listTools();
+  }
   console.debug(`[WebMCP] Got ${tools.length} tools`, tools);
-  chrome.runtime.sendMessage({ tools, url: location.href });
+  chrome.runtime.sendMessage({ tools, url: window.location.href });
 }
+
+function getLocation(crossOriginIframeWindow) {
+  const promise = new Promise((resolve) => {
+    const listener = ({ data }) => {
+      if (data.action === 'GET_LOCATION_RESPONSE') {
+        window.removeEventListener('message', listener);
+        resolve(data.location);
+      }
+    };
+    window.addEventListener('message', listener);
+  });
+  crossOriginIframeWindow.postMessage({ action: 'GET_LOCATION' }, '*');
+  return promise;
+}
+
+window.addEventListener('message', ({ data, origin, source }) => {
+  if (data.action === 'GET_LOCATION') {
+    const location = window.location.href;
+    source.postMessage({ action: 'GET_LOCATION_RESPONSE', location }, origin);
+  }
+});
 
 window.addEventListener('toolactivated', ({ toolName }) => {
   console.debug(`[WebMCP] Tool "${toolName}" started execution.`);

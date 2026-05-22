@@ -23,11 +23,11 @@ const apiKeyBtn = document.getElementById('apiKeyBtn');
 const promptResults = document.getElementById('promptResults');
 const advancedSection = document.getElementById('advancedSection');
 
-// Inject content script first.
+// First, request list of tools from content script living in top-level frame.
 (async () => {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    await chrome.tabs.sendMessage(tab.id, { action: 'LIST_TOOLS' });
+    await chrome.tabs.sendMessage(tab.id, { action: 'LIST_TOOLS' }, { frameId: 0 });
   } catch (error) {
     const statusDiv = document.getElementById('status');
     statusDiv.textContent = error;
@@ -43,6 +43,8 @@ let lastSuggestedUserPrompt = '';
 
 // Listen for the results coming back from content.js
 chrome.runtime.onMessage.addListener(async ({ message, tools, url }, sender) => {
+  if (sender.frameId && sender.frameId !== 0) return;
+
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (sender.tab && sender.tab.id !== tab.id) return;
 
@@ -74,7 +76,8 @@ chrome.runtime.onMessage.addListener(async ({ message, tools, url }, sender) => 
   executeBtn.disabled = false;
   copyToClipboard.hidden = false;
 
-  const keys = Object.keys(tools[0]);
+  const KEYS = ['description', 'inputSchema', 'readOnlyHint', 'untrustedContentHint', 'name'];
+  const keys = KEYS.filter((key) => tools.some((tool) => key in tool));
   keys.forEach((key) => {
     const th = document.createElement('th');
     th.textContent = key;
@@ -97,7 +100,11 @@ chrome.runtime.onMessage.addListener(async ({ message, tools, url }, sender) => 
     const option = document.createElement('option');
     option.textContent = `"${item.name}"`;
     option.value = item.name;
-    option.dataset.inputSchema = item.inputSchema;
+    if (new Set(tools.map((t) => t.location)).size > 1) {
+      option.textContent += ` | ${item.location || ''}`;
+    }
+    option.dataset.inputSchema = item.inputSchema || '{}';
+    option.dataset.location = item.location || '';
     toolNames.appendChild(option);
   });
   updateDefaultValueForInputArgs();
@@ -246,17 +253,19 @@ async function promptAI() {
       finalResponseGiven = true;
     } else {
       const toolResponses = [];
-      for (const { name, args } of functionCalls) {
+      for (const { name: toolName, args } of functionCalls) {
+        const [locationIndex, name] = toolName.split(/_(.*)/s)[1].split(/_(.*)/s);
+        const location = currentTools[locationIndex].location;
         const inputArgs = JSON.stringify(args);
         logPrompt(`AI calling tool "${name}" with ${inputArgs}`);
         try {
-          const result = await executeTool(tab.id, name, inputArgs);
-          toolResponses.push({ functionResponse: { name, response: { result } } });
+          const result = await executeTool(tab.id, name, inputArgs, location);
+          toolResponses.push({ functionResponse: { name: toolName, response: { result } } });
           logPrompt(`Tool "${name}" result: ${result}`);
         } catch (e) {
           logPrompt(`⚠️ Error executing tool "${name}": ${e.message}`);
           toolResponses.push({
-            functionResponse: { name, response: { error: e.message } },
+            functionResponse: { name: toolName, response: { error: e.message } },
           });
         }
       }
@@ -299,17 +308,19 @@ executeBtn.onclick = async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const name = toolNames.selectedOptions[0].value;
   const inputArgs = inputArgsText.value;
-  toolResults.textContent = await executeTool(tab.id, name, inputArgs).catch(
+  const location = toolNames.selectedOptions[0].dataset.location;
+  toolResults.textContent = await executeTool(tab.id, name, inputArgs, location).catch(
     (error) => `⚠️ Error: "${error}"`,
   );
 };
 
-async function executeTool(tabId, name, inputArgs) {
+async function executeTool(tabId, name, inputArgs, location) {
   try {
     const result = await chrome.tabs.sendMessage(tabId, {
       action: 'EXECUTE_TOOL',
       name,
       inputArgs,
+      location,
     });
     if (result !== null) return result;
   } catch (error) {
@@ -320,6 +331,7 @@ async function executeTool(tabId, name, inputArgs) {
   await waitForPageLoad(tabId);
   return await chrome.tabs.sendMessage(tabId, {
     action: 'GET_CROSS_DOCUMENT_SCRIPT_TOOL_RESULT',
+    location,
   });
 }
 
@@ -359,8 +371,9 @@ function getConfig() {
   ];
 
   const functionDeclarations = currentTools.map((tool) => {
+    const locationIndex = currentTools.findIndex((t) => t.location === tool.location);
     return {
-      name: tool.name,
+      name: `_${locationIndex}_${tool.name}`,
       description: tool.description,
       parametersJsonSchema: tool.inputSchema
         ? JSON.parse(tool.inputSchema)
