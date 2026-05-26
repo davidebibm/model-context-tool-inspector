@@ -5,6 +5,8 @@
 
 console.debug(`[WebMCP] Content script injected in ${window.location.href}`);
 
+const modelContext = document.modelContext || navigator.modelContext;
+
 chrome.runtime.onMessage.addListener(({ action, name, inputArgs, location }, _, reply) => {
   try {
     if (!navigator.modelContextTesting) {
@@ -12,8 +14,8 @@ chrome.runtime.onMessage.addListener(({ action, name, inputArgs, location }, _, 
     }
     if (action == 'LIST_TOOLS') {
       listTools();
-      if ('ontoolchange' in navigator.modelContext) {
-        navigator.modelContext.addEventListener('toolchange', listTools);
+      if ('ontoolchange' in modelContext) {
+        modelContext.addEventListener('toolchange', listTools);
         return;
       }
       navigator.modelContextTesting.addEventListener('toolchange', listTools);
@@ -32,10 +34,10 @@ chrome.runtime.onMessage.addListener(({ action, name, inputArgs, location }, _, 
       }
       // Execute the experimental tool
       let promise;
-      if ('executeTool' in navigator.modelContext) {
-        promise = navigator.modelContext.getTools().then((tools) => {
+      if ('executeTool' in modelContext) {
+        promise = modelContext.getTools().then((tools) => {
           const tool = tools.find((t) => t.name === name && t.window === window);
-          return navigator.modelContext.executeTool(tool, inputArgs);
+          return modelContext.executeTool(tool, inputArgs);
         });
       } else {
         promise = navigator.modelContextTesting.executeTool(name, inputArgs);
@@ -68,8 +70,8 @@ chrome.runtime.onMessage.addListener(({ action, name, inputArgs, location }, _, 
 
 async function listTools() {
   let tools = [];
-  if ('getTools' in navigator.modelContext) {
-    for (const tool of await navigator.modelContext.getTools()) {
+  if ('getTools' in modelContext) {
+    for (const tool of await modelContext.getTools()) {
       let location;
       try {
         location = tool.window.location.href;
