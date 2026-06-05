@@ -264,7 +264,7 @@ async function promptAI() {
         const inputArgs = JSON.stringify(args);
         logPrompt(`AI calling tool "${name}" with ${inputArgs}`);
         try {
-          const result = await executeTool(tab.id, name, inputArgs, location);
+          const result = await executeTool(tab, name, inputArgs, location);
           toolResponses.push({ functionResponse: { name: toolName, response: { result } } });
           logPrompt(`Tool "${name}" result: ${result}`);
         } catch (e) {
@@ -314,27 +314,28 @@ executeBtn.onclick = async () => {
   const name = toolNames.selectedOptions[0].value;
   const inputArgs = inputArgsText.value;
   const location = toolNames.selectedOptions[0].dataset.location;
-  toolResults.textContent = await executeTool(tab.id, name, inputArgs, location).catch(
+  toolResults.textContent = await executeTool(tab, name, inputArgs, location).catch(
     (error) => `⚠️ Error: "${error}"`,
   );
 };
 
-async function executeTool(tabId, name, inputArgs, location) {
+async function executeTool(tab, name, inputArgs, location) {
+  // Target the main frame if no location is specified or it matches the top-level URL
+  const options = !location || location === tab.url ? { frameId: 0 } : {};
   try {
-    const result = await chrome.tabs.sendMessage(tabId, {
-      action: 'EXECUTE_TOOL',
-      name,
-      inputArgs,
-      location,
-    });
+    const result = await chrome.tabs.sendMessage(
+      tab.id,
+      { action: 'EXECUTE_TOOL', name, inputArgs, location },
+      options,
+    );
     if (result !== null) return result;
   } catch (error) {
     if (!error.message.includes('message channel is closed')) throw error;
   }
   // A navigation was triggered. The result will be on the next document.
   // TODO: Handle case where a new tab is opened.
-  await waitForPageLoad(tabId);
-  return await chrome.tabs.sendMessage(tabId, {
+  await waitForPageLoad(tab.id);
+  return await chrome.tabs.sendMessage(tab.id, {
     action: 'GET_CROSS_DOCUMENT_SCRIPT_TOOL_RESULT',
     location,
   });
