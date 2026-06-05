@@ -23,6 +23,7 @@ const resetBtn = document.getElementById('resetBtn');
 const apiKeyBtn = document.getElementById('apiKeyBtn');
 const promptResults = document.getElementById('promptResults');
 const advancedSection = document.getElementById('advancedSection');
+const suggestUserPromptCheckbox = document.getElementById('suggestUserPromptCheckbox');
 
 // First, request list of tools from content script living in top-level frame.
 (async () => {
@@ -169,6 +170,8 @@ async function initGenAI() {
   promptBtn.disabled = !localStorage.apiKey;
   resetBtn.disabled = !localStorage.apiKey;
   apiKeyBtn.textContent = localStorage.apiKey ? 'Update Gemini API key' : 'Set Gemini API key';
+
+  suggestUserPromptCheckbox.checked = localStorage.suggestUserPrompt !== 'false';
 }
 await initGenAI();
 
@@ -181,7 +184,14 @@ document.querySelectorAll('input[name="model"]').forEach((radio) => {
   };
 });
 
+suggestUserPromptCheckbox.onchange = () => {
+  localStorage.suggestUserPrompt = suggestUserPromptCheckbox.checked;
+  if (localStorage.suggestUserPrompt) suggestUserPrompt();
+  advancedSection.hidePopover();
+};
+
 async function suggestUserPrompt() {
+  if (localStorage.suggestUserPrompt === 'false') return;
   if (currentTools.length == 0 || !genAI || userPromptText.value !== lastSuggestedUserPrompt)
     return;
   const userPromptId = ++userPromptPendingId;

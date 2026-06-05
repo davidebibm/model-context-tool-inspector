@@ -296,7 +296,7 @@ dialog::backdrop {
   background-color: #f3f4f6;
 }
 
-.model-option input[type="radio"] {
+.model-option input {
   width: auto;
 }
 
