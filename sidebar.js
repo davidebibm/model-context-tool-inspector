@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AIProviderFactory } from './ai-providers.js';
+import { AIProviderFactory, OllamaProvider } from './ai-providers.js';
 import { getIframeOrigins } from './utils.js';
 
 const statusDiv = document.getElementById('status');
@@ -179,21 +179,32 @@ async function initAIProvider() {
   const defaultModels = {
     gemini: 'gemini-3-flash-preview',
     openrouter: 'google/gemini-3.5-flash',
+    ollama: 'llama3.2',
   };
   localStorage.model ??= env?.model || defaultModels[localStorage.provider];
-  
-  // Create provider instance if API key exists
-  const apiKey = localStorage[`${localStorage.provider}ApiKey`];
-  if (apiKey) {
-    aiProvider = AIProviderFactory.create(localStorage.provider, {
-      apiKey,
-      model: localStorage.model,
-    });
+
+  const isOllama = localStorage.provider === 'ollama';
+
+  // Ollama runs locally — no API key required
+  if (isOllama) {
+    aiProvider = AIProviderFactory.create('ollama', { model: localStorage.model });
+  } else {
+    const apiKey = localStorage[`${localStorage.provider}ApiKey`];
+    if (apiKey) {
+      aiProvider = AIProviderFactory.create(localStorage.provider, {
+        apiKey,
+        model: localStorage.model,
+      });
+    }
   }
-  
+
+  const apiKey = isOllama ? true : localStorage[`${localStorage.provider}ApiKey`];
   promptBtn.disabled = !apiKey;
   resetBtn.disabled = !apiKey;
-  apiKeyBtn.textContent = apiKey ? 'Update API key' : 'Set API key';
+  apiKeyBtn.hidden = isOllama;
+  if (!isOllama) {
+    apiKeyBtn.textContent = localStorage[`${localStorage.provider}ApiKey`] ? 'Update API key' : 'Set API key';
+  }
 
   suggestUserPromptCheckbox.checked = localStorage.suggestUserPrompt !== 'false';
   
@@ -221,15 +232,36 @@ function updateProviderUI() {
   });
 }
 
-function updateModelUI() {
+async function updateModelUI() {
   const modelOptionsDiv = document.getElementById('modelOptions');
   modelOptionsDiv.innerHTML = '';
-  
-  const models = AIProviderFactory.getModelsForProvider(localStorage.provider);
+
+  let models;
+  if (localStorage.provider === 'ollama') {
+    const placeholder = document.createElement('span');
+    placeholder.className = 'model-option muted';
+    placeholder.textContent = 'Fetching local models…';
+    modelOptionsDiv.appendChild(placeholder);
+    try {
+      models = await OllamaProvider.fetchAvailableModels();
+      // Persist a sensible default if none stored yet
+      if (models.length && !models.find(m => m.id === localStorage.model)) {
+        localStorage.model = models[0].id;
+        if (aiProvider) aiProvider.config.model = models[0].id;
+      }
+    } catch {
+      placeholder.textContent = '⚠ Could not reach Ollama — is it running?';
+      return;
+    }
+    modelOptionsDiv.innerHTML = '';
+  } else {
+    models = AIProviderFactory.getModelsForProvider(localStorage.provider);
+  }
+
   models.forEach((model) => {
     const label = document.createElement('label');
     label.className = 'model-option';
-    
+
     const radio = document.createElement('input');
     radio.type = 'radio';
     radio.name = 'model';
@@ -243,10 +275,10 @@ function updateModelUI() {
       }
       advancedSection.hidePopover();
     };
-    
+
     const span = document.createElement('span');
     span.textContent = model.name;
-    
+
     label.appendChild(radio);
     label.appendChild(span);
     modelOptionsDiv.appendChild(label);
@@ -375,7 +407,8 @@ resetBtn.onclick = () => {
 };
 
 apiKeyBtn.onclick = async () => {
-  const providerName = localStorage.provider === 'gemini' ? 'Gemini' : 'OpenRouter';
+  const providerNames = { gemini: 'Gemini', openrouter: 'OpenRouter' };
+  const providerName = providerNames[localStorage.provider] || localStorage.provider;
   const storageKey = `${localStorage.provider}ApiKey`;
   const apiKey = prompt(`Enter ${providerName} API key`, localStorage[storageKey] || '');
   if (apiKey == null) return;

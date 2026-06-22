@@ -284,6 +284,146 @@ class OpenRouterChat extends AIChat {
 }
 
 /**
+ * Ollama Provider Implementation (OpenAI-compatible local API)
+ */
+class OllamaProvider extends AIProvider {
+  constructor(config) {
+    super(config);
+    this.baseUrl = config.baseUrl || 'http://localhost:11434/v1';
+  }
+
+  createChat() {
+    return new OllamaChat(this);
+  }
+
+  async generateContent(params) {
+    const messages = Array.isArray(params.contents)
+      ? params.contents.map(c => ({
+          role: 'user',
+          content: typeof c === 'string' ? c : JSON.stringify(c),
+        }))
+      : [{ role: 'user', content: params.contents }];
+
+    const response = await this._makeRequest('/chat/completions', {
+      model: params.model || this.config.model,
+      messages,
+    });
+
+    return {
+      text: response.choices[0]?.message?.content || '',
+    };
+  }
+
+  async _makeRequest(endpoint, body) {
+    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Ollama API error: ${response.status} - ${error}`);
+    }
+
+    return await response.json();
+  }
+
+  static getAvailableModels() {
+    return [];
+  }
+
+  static async fetchAvailableModels(baseUrl = 'http://localhost:11434') {
+    const response = await fetch(`${baseUrl}/api/tags`);
+    if (!response.ok) throw new Error(`Ollama error: ${response.status}`);
+    const { models } = await response.json();
+    return models.map(m => ({ id: m.name, name: m.name }));
+  }
+}
+
+class OllamaChat extends AIChat {
+  constructor(provider) {
+    super();
+    this.provider = provider;
+    this.messages = [];
+  }
+
+  async sendMessage(params) {
+    const { message, config } = params;
+
+    if (Array.isArray(message)) {
+      for (const item of message) {
+        if (item.functionResponse) {
+          this.messages.push({
+            role: 'tool',
+            tool_call_id: item.functionResponse.name,
+            content: JSON.stringify(item.functionResponse.response),
+          });
+        }
+      }
+    } else {
+      this.messages.push({ role: 'user', content: message });
+    }
+
+    const requestBody = {
+      model: this.provider.config.model,
+      messages: this._buildMessages(config),
+    };
+
+    if (config?.tools?.[0]?.functionDeclarations) {
+      requestBody.tools = this._convertToolsToOpenAI(config.tools[0].functionDeclarations);
+    }
+
+    const response = await this.provider._makeRequest('/chat/completions', requestBody);
+
+    const choice = response.choices[0];
+    const assistantMessage = choice.message;
+
+    this.messages.push(assistantMessage);
+
+    const result = {
+      text: assistantMessage.content || '',
+      functionCalls: [],
+      candidates: response.choices,
+    };
+
+    if (assistantMessage.tool_calls) {
+      result.functionCalls = assistantMessage.tool_calls.map(tc => ({
+        name: tc.function.name,
+        args: JSON.parse(tc.function.arguments),
+      }));
+    }
+
+    return result;
+  }
+
+  _buildMessages(config) {
+    const messages = [...this.messages];
+
+    if (config?.systemInstruction) {
+      const systemContent = Array.isArray(config.systemInstruction)
+        ? config.systemInstruction.join('\n')
+        : config.systemInstruction;
+
+      messages.unshift({ role: 'system', content: systemContent });
+    }
+
+    return messages;
+  }
+
+  _convertToolsToOpenAI(functionDeclarations) {
+    return functionDeclarations.map(func => ({
+      type: 'function',
+      function: {
+        name: func.name,
+        description: func.description,
+        parameters: func.parametersJsonSchema,
+      },
+    }));
+  }
+}
+
+/**
  * Factory to create AI provider instances
  */
 class AIProviderFactory {
@@ -293,6 +433,8 @@ class AIProviderFactory {
         return new GeminiProvider(config);
       case 'openrouter':
         return new OpenRouterProvider(config);
+      case 'ollama':
+        return new OllamaProvider(config);
       default:
         throw new Error(`Unknown provider type: ${providerType}`);
     }
@@ -302,6 +444,7 @@ class AIProviderFactory {
     return [
       { id: 'gemini', name: 'Google Gemini' },
       { id: 'openrouter', name: 'OpenRouter' },
+      { id: 'ollama', name: 'Ollama (local)' },
     ];
   }
 
@@ -311,12 +454,14 @@ class AIProviderFactory {
         return GeminiProvider.getAvailableModels();
       case 'openrouter':
         return OpenRouterProvider.getAvailableModels();
+      case 'ollama':
+        return OllamaProvider.getAvailableModels();
       default:
         return [];
     }
   }
 }
 
-export { AIProviderFactory, AIProvider, AIChat };
+export { AIProviderFactory, AIProvider, AIChat, OllamaProvider };
 
 // Made with Bob
