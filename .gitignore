@@ -1,2 +1,4 @@
 .env.json
 js-genai.js
+.env.json
+node_modules

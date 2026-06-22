@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { GoogleGenAI } from './js-genai.js';
+import { AIProviderFactory } from './ai-providers.js';
 import { getIframeOrigins } from './utils.js';
 
 const statusDiv = document.getElementById('status');
@@ -148,41 +148,110 @@ copyAsJSON.onclick = async () => {
 
 // Interact with the page
 
-let genAI, chat;
+let aiProvider, chat;
 
 const envModulePromise = import('./.env.json', { with: { type: 'json' } });
 
-async function initGenAI() {
+async function initAIProvider() {
   let env;
   try {
     // Try load .env.json if present.
     env = (await envModulePromise).default;
   } catch {}
-  if (env?.apiKey) localStorage.apiKey ??= env.apiKey;
+  
+  // Initialize provider settings
+  localStorage.provider ??= env?.provider || 'gemini';
+  
+  // Migrate old API keys
+  if (env?.apiKey) {
+    localStorage[`${localStorage.provider}ApiKey`] ??= env.apiKey;
+  }
+  
+  // Migrate old model settings
   if (localStorage.model === 'gemini-2.5-flash') {
     localStorage.model = 'gemini-3-flash-preview';
   }
   if (localStorage.model === 'gemini-3.1-flash-lite-preview') {
     localStorage.model = 'gemini-3.1-flash-lite';
   }
-  localStorage.model ??= env?.model || 'gemini-3-flash-preview';
-  genAI = localStorage.apiKey ? new GoogleGenAI({ apiKey: localStorage.apiKey }) : undefined;
-  promptBtn.disabled = !localStorage.apiKey;
-  resetBtn.disabled = !localStorage.apiKey;
-  apiKeyBtn.textContent = localStorage.apiKey ? 'Update Gemini API key' : 'Set Gemini API key';
+  
+  // Set default model based on provider
+  const defaultModels = {
+    gemini: 'gemini-3-flash-preview',
+    openrouter: 'google/gemini-3.5-flash',
+  };
+  localStorage.model ??= env?.model || defaultModels[localStorage.provider];
+  
+  // Create provider instance if API key exists
+  const apiKey = localStorage[`${localStorage.provider}ApiKey`];
+  if (apiKey) {
+    aiProvider = AIProviderFactory.create(localStorage.provider, {
+      apiKey,
+      model: localStorage.model,
+    });
+  }
+  
+  promptBtn.disabled = !apiKey;
+  resetBtn.disabled = !apiKey;
+  apiKeyBtn.textContent = apiKey ? 'Update API key' : 'Set API key';
 
   suggestUserPromptCheckbox.checked = localStorage.suggestUserPrompt !== 'false';
+  
+  // Initialize provider and model selection UI
+  updateProviderUI();
+  updateModelUI();
 }
-await initGenAI();
+await initAIProvider();
 
-document.querySelectorAll('input[name="model"]').forEach((radio) => {
-  radio.checked = radio.value === localStorage.model;
+// Provider selection
+document.querySelectorAll('input[name="provider"]').forEach((radio) => {
+  radio.checked = radio.value === localStorage.provider;
   radio.onclick = () => {
-    localStorage.model = radio.value;
+    localStorage.provider = radio.value;
     chat = undefined;
-    advancedSection.hidePopover();
+    aiProvider = null;
+    updateModelUI();
+    initAIProvider();
   };
 });
+
+function updateProviderUI() {
+  document.querySelectorAll('input[name="provider"]').forEach((radio) => {
+    radio.checked = radio.value === localStorage.provider;
+  });
+}
+
+function updateModelUI() {
+  const modelOptionsDiv = document.getElementById('modelOptions');
+  modelOptionsDiv.innerHTML = '';
+  
+  const models = AIProviderFactory.getModelsForProvider(localStorage.provider);
+  models.forEach((model) => {
+    const label = document.createElement('label');
+    label.className = 'model-option';
+    
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'model';
+    radio.value = model.id;
+    radio.checked = model.id === localStorage.model;
+    radio.onclick = () => {
+      localStorage.model = model.id;
+      chat = undefined;
+      if (aiProvider) {
+        aiProvider.config.model = model.id;
+      }
+      advancedSection.hidePopover();
+    };
+    
+    const span = document.createElement('span');
+    span.textContent = model.name;
+    
+    label.appendChild(radio);
+    label.appendChild(span);
+    modelOptionsDiv.appendChild(label);
+  });
+}
 
 suggestUserPromptCheckbox.onchange = () => {
   localStorage.suggestUserPrompt = suggestUserPromptCheckbox.checked;
@@ -192,10 +261,10 @@ suggestUserPromptCheckbox.onchange = () => {
 
 async function suggestUserPrompt() {
   if (localStorage.suggestUserPrompt === 'false') return;
-  if (currentTools.length == 0 || !genAI || userPromptText.value !== lastSuggestedUserPrompt)
+  if (currentTools.length == 0 || !aiProvider || userPromptText.value !== lastSuggestedUserPrompt)
     return;
   const userPromptId = ++userPromptPendingId;
-  const response = await genAI.models.generateContent({
+  const response = await aiProvider.generateContent({
     model: localStorage.model,
     contents: [
       '**Context:**',
@@ -243,7 +312,7 @@ let trace = [];
 async function promptAI() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-  chat ??= genAI.chats.create({ model: localStorage.model });
+  chat ??= aiProvider.createChat();
 
   const message = userPromptText.value;
   userPromptText.value = '';
@@ -306,10 +375,12 @@ resetBtn.onclick = () => {
 };
 
 apiKeyBtn.onclick = async () => {
-  const apiKey = prompt('Enter Gemini API key', localStorage.apiKey);
+  const providerName = localStorage.provider === 'gemini' ? 'Gemini' : 'OpenRouter';
+  const storageKey = `${localStorage.provider}ApiKey`;
+  const apiKey = prompt(`Enter ${providerName} API key`, localStorage[storageKey] || '');
   if (apiKey == null) return;
-  localStorage.apiKey = apiKey;
-  await initGenAI();
+  localStorage[storageKey] = apiKey;
+  await initAIProvider();
   suggestUserPrompt();
 };
 

@@ -43,19 +43,19 @@
       </div>
 
       <dialog id="advancedSection" popover autofocus>
-        <div class="menu-label">Gemini Model</div>
+        <div class="menu-label">AI Provider</div>
         <label class="model-option">
-          <input type="radio" name="model" value="gemini-3-flash-preview">
-          <span>Gemini 3 Flash Preview</span>
+          <input type="radio" name="provider" value="gemini">
+          <span>Google Gemini</span>
         </label>
         <label class="model-option">
-          <input type="radio" name="model" value="gemini-3.1-flash-lite">
-          <span>Gemini 3.1 Flash-Lite</span>
+          <input type="radio" name="provider" value="openrouter">
+          <span>OpenRouter</span>
         </label>
-        <label class="model-option">
-          <input type="radio" name="model" value="gemini-3.5-flash">
-          <span>Gemini 3.5 Flash</span>
-        </label>
+        
+        <div class="menu-label">Model</div>
+        <div id="modelOptions"></div>
+        
         <div class="menu-label">Advanced Options</div>
         <label class="model-option">
           <input type="checkbox" id="suggestUserPromptCheckbox">
@@ -66,7 +66,7 @@
       <div class="form-group">
         <button id="promptBtn" disabled>Send</button>
         <button id="resetBtn" class="secondary" disabled>Reset</button>
-        <button id="apiKeyBtn" class="secondary">Set Gemini API key</button>
+        <button id="apiKeyBtn" class="secondary">Set API key</button>
         <button id="traceBtn" class="secondary">Copy trace</button>
       </div>
 
