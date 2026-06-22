@@ -181,6 +181,7 @@ class OpenRouterProvider extends AIProvider {
       { id: 'google/gemini-pro', name: 'Gemini Pro' },
       { id: 'meta-llama/llama-3.1-70b-instruct', name: 'Llama 3.1 70B' },
       { id: 'mistralai/mistral-large', name: 'Mistral Large' },
+      { id: 'ibm-granite/granite-4.1-8b', name: 'IBM Granite 4.1 8B' },
     ];
   }
 }
